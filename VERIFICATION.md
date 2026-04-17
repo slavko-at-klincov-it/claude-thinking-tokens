@@ -23,18 +23,19 @@ These are **Anthropic's numbers**, not ours. We do not calculate token counts.
 
 ### Stage 2: Claude Code CLI (aggregation)
 
-Claude Code CLI receives the API response and aggregates data across the session:
+Claude Code CLI receives the API response, aggregates data, and builds the statusline JSON. Some fields are directly from the API, others are computed by Claude Code internally. We cannot inspect Claude Code's source (minified), so the exact origin of some fields is documented as "not verified."
 
-| Field | Source | How |
-|-------|--------|-----|
-| `rate_limits.five_hour.used_percentage` | Anthropic account limits | API response header or internal tracking |
-| `rate_limits.five_hour.resets_at` | Anthropic account limits | Unix timestamp from API |
-| `rate_limits.seven_day.*` | Same as above | 7-day rolling window |
-| `context_window.used_percentage` | CLI calculation | Current context size / context_window_size |
-| `context_window.total_input_tokens` | CLI aggregation | Sum of all input_tokens across session |
-| `context_window.total_output_tokens` | CLI aggregation | Sum of all output_tokens across session |
-| `context_window.current_usage.*` | API response | Direct from last API call's usage object |
-| `transcript_path` | CLI | Path to the JSONL conversation log |
+| Field | What we know | What we don't know |
+|-------|-------------|-------------------|
+| `rate_limits.*.used_percentage` | Percentage of plan quota used | Exact source (not in API response body or transcript, likely from API response headers or a separate endpoint) |
+| `rate_limits.*.resets_at` | Unix timestamp when the window resets | Same as above |
+| `context_window.used_percentage` | Percentage of context window used | Exact formula (our reverse-engineering yielded 23% from current_usage totals, but Claude Code shows 24%, suggesting a different calculation) |
+| `context_window.total_input_tokens` | Cumulative session input metric | Exact aggregation method (value 384k is too large for "sum of fresh input_tokens" (~300) but too small for "sum of all tokens sent" (millions)) |
+| `context_window.total_output_tokens` | Cumulative session output metric | Same uncertainty as total_input |
+| `context_window.current_usage.*` | Per-call token counts | Verified: matches API `usage` object structure and values from transcript |
+| `transcript_path` | JSONL conversation log path | N/A, straightforward |
+
+**Important**: Our script uses these values as-is for display. For `session` (line 2), we sum `total_input_tokens + total_output_tokens`. We trust that Claude Code calculates these correctly, but we cannot independently verify their exact semantics because Claude Code's aggregation logic is not documented or open-source.
 
 ### Stage 3: Statusline JSON (stdin to our script)
 
@@ -59,14 +60,14 @@ Our script (`statusline.sh`) performs these calculations on the JSON:
 
 ### What We Calculate vs What We Pass Through
 
-| Category | Our role |
-|----------|----------|
-| Rate limits (%, reset time) | **Pass through** from JSON, only format for display |
-| Context window % | **Pass through** from JSON |
-| last API-Call | **Sum** 3 fields from JSON (simple addition) |
-| session | **Sum** 2 fields from JSON (simple addition) |
-| cached history | **Pass through** from JSON |
-| thinking ON/OFF | **Parse** transcript JSONL (check content_types) |
+| Category | Our role | Verified? |
+|----------|----------|-----------|
+| Rate limits (%, reset time) | **Pass through** from JSON, only format for display | Source of raw data not verified (Claude Code internal) |
+| Context window % | **Pass through** from JSON | Source formula not verified (1% discrepancy found) |
+| last API-Call | **Sum** 3 fields from `current_usage` (simple addition) | Verified: math is correct, fields come from API usage object |
+| session | **Sum** 2 fields from `context_window` (simple addition) | Math verified, but exact semantics of `total_input/output_tokens` not verified |
+| cached history | **Pass through** `cache_read_input_tokens` | Verified: direct from API usage object |
+| thinking ON/OFF | **Parse** transcript JSONL (check content_types) | Verified: 100% reliable, tested across 12 experiments |
 | thinking tokens | **Calculate** via calibrated subtraction (our formula) |
 | Bar fill / colors | **Calculate** from percentage (cosmetic) |
 
