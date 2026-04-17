@@ -82,9 +82,9 @@ think_calls=""
 think_total_calls=""
 if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
   think_data=$(tail -n 500 "$transcript_path" 2>/dev/null | jq -rs '
-    # Find last human message, then all assistant calls after it
-    (to_entries | map(select(.value.type == "human")) | last | .key // -1) as $last_human |
-    [to_entries[] | select(.key > $last_human and .value.type == "assistant" and .value.message.usage.output_tokens != null) | .value] |
+    # Find last user PROMPT (not tool_result). User prompts have string content, tool results have array.
+    (to_entries | map(select(.value.type == "user" and (.value.message.content | type) == "string")) | last | .key // -1) as $last_prompt |
+    [to_entries[] | select(.key > $last_prompt and .value.type == "assistant" and .value.message.usage.output_tokens != null) | .value] |
     if length == 0 then "||||"
     else
       # Group by requestId to deduplicate (same call appears once per content block)
