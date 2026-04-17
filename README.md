@@ -54,7 +54,29 @@ thinking: ON ░░░░░░░░░░ 4% ~5.1k/128.0k (heavy)
 | 71-90% | Red |
 | 91%+ | Bold red |
 
-### Installation
+### Quick Install
+
+```bash
+# 1. Install jq if not present
+brew install jq        # macOS
+# apt install jq       # Linux
+
+# 2. Clone and install
+git clone https://github.com/slavko-at-klincov-it/claude-thinking-tokens.git
+cd claude-thinking-tokens
+./install.sh
+
+# 3. Start a new Claude Code session
+claude
+```
+
+The install script copies `statusline.sh` to `~/.claude/` and merges the statusline config into your existing `~/.claude/settings.json` (preserving all other settings).
+
+To remove: `./install.sh remove`
+
+### Manual Installation
+
+If you prefer to do it yourself:
 
 1. Copy `statusline.sh` to `~/.claude/statusline.sh`
 2. Make executable: `chmod +x ~/.claude/statusline.sh`
@@ -71,8 +93,8 @@ thinking: ON ░░░░░░░░░░ 4% ~5.1k/128.0k (heavy)
 
 ### Dependencies
 
-- `jq` (JSON processor)
-- `date` (GNU or BSD)
+- `jq` (JSON processor, required)
+- `date` (GNU or BSD, included in macOS/Linux)
 - Bash 4+
 
 ## Experiment Setup
