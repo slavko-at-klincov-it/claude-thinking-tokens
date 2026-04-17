@@ -54,7 +54,7 @@ thinking: ON ░░░░░░░░░░ 4% ~5.1k/128.0k (heavy)
 | 71-90% | Red |
 | 91%+ | Bold red |
 
-### Quick Install
+### Quick Install (macOS / Linux)
 
 ```bash
 # 1. Install jq if not present
@@ -73,6 +73,37 @@ claude
 The install script copies `statusline.sh` to `~/.claude/` and merges the statusline config into your existing `~/.claude/settings.json` (preserving all other settings).
 
 To remove: `./install.sh remove`
+
+### Platform Support
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| macOS | Supported | Tested on macOS 15 (Darwin). All dependencies pre-installed except `jq` (`brew install jq`). |
+| Linux | Supported | Requires `jq` (`apt install jq` / `dnf install jq`). Uses GNU `date`. |
+| Windows | Not supported | The statusline is a bash script. Windows users running Claude Code via WSL can use the Linux install path. Native PowerShell is not supported. |
+
+### Optional: Thinking Configuration
+
+The statusline works with **any** Claude Code thinking configuration. No special env vars are required.
+
+If you want to maximize thinking (as used in our experiments), you can add these to your `~/.claude/settings.json`:
+
+```json
+{
+  "env": {
+    "MAX_THINKING_TOKENS": "128000",
+    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1"
+  },
+  "effortLevel": "max"
+}
+```
+
+These are **optional personal preferences**, not requirements:
+- `MAX_THINKING_TOKENS`: Sets the thinking budget ceiling per API call (Opus 4.6 supports up to 128k output tokens)
+- `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING`: Uses manual thinking mode instead of adaptive (deprecated on Opus 4.6 but still functional)
+- `effortLevel`: Controls reasoning depth (`max` is highest, only on Opus 4.6)
+
+Without these, the statusline still detects thinking ON/OFF and estimates thinking tokens correctly, it just reflects whatever thinking mode Claude Code uses by default.
 
 ### Manual Installation
 
