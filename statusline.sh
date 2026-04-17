@@ -3,15 +3,14 @@
 #
 # Line 1: 5h Limit ██░░░░░░░░ 19% 1h32m | 7d Limit ██░░░░░░░░ 20% Fr 11:00 | ctx 4%
 # Line 2: last API-Call 724 | session 36.5k | cached history 75.6k
-# Line 3: thinking ██░░░░░░░░ 15% ~19k/128k (summary, est.)
+# Line 3: thinking: ON ████░░░░░░ ~5.4k this turn (heavy, 8/15 calls)
 #
 # "last API-Call" = new tokens (input + cache_creation + output), excludes cache reads
 # "cached history" = cache_read_input_tokens (conversation history reused from cache)
-# "think" = estimated thinking tokens for last API call
-#          = output_tokens - estimated_visible_tokens (chars/2.7 for markdown text)
-#          NOTE: output_tokens includes FULL thinking tokens (not just summary).
-#          The visible thinking TEXT is summarized, but the token COUNT is real.
-#          Calibrated: ~2.7 chars/token for markdown (verified: non-thinking cases → ~0).
+# "thinking" = AGGREGATED across entire turn (all API calls since last user message)
+#              Not just the last call! Heavy thinking often happens in earlier calls.
+#              = SUM of (output_tokens - visible_tokens) across all calls in the turn
+#              Calibrated: ~2.7 chars/token for markdown (verified: non-thinking → ~0).
 
 BAR_WIDTH=10
 THINKING_CAP=128000
@@ -73,37 +72,47 @@ turn_new=$(echo "$input" | jq -r '
 turn_cached=$(echo "$input" | jq -r '.context_window.current_usage.cache_read_input_tokens // empty' 2>/dev/null)
 transcript_path=$(echo "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
 
-# --- Thinking detection + estimate for last API call ---
-# Parse transcript for definitive thinking detection (content_types has "thinking")
-# and estimate thinking tokens via: output_tokens - visible_tokens
+# --- Thinking detection + estimate for ENTIRE TURN (all calls since last user message) ---
+# A "turn" = all assistant API calls since the last human message.
+# Aggregates thinking across the full turn, not just the last API call.
 think_active=""
 think_est=""
 think_ratio=""
+think_calls=""
+think_total_calls=""
 if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
-  think_data=$(tail -n 300 "$transcript_path" 2>/dev/null | jq -rs '
-    map(select(.type == "assistant" and .message.usage.output_tokens != null)) as $assistants |
-    if ($assistants | length) == 0 then "||"
+  think_data=$(tail -n 500 "$transcript_path" 2>/dev/null | jq -rs '
+    # Find last human message, then all assistant calls after it
+    (to_entries | map(select(.value.type == "human")) | last | .key // -1) as $last_human |
+    [to_entries[] | select(.key > $last_human and .value.type == "assistant" and .value.message.usage.output_tokens != null) | .value] |
+    if length == 0 then "||||"
     else
-      ($assistants | last | .requestId) as $rid |
-      ($assistants | map(select(.requestId == $rid))) as $last_call |
-      ($last_call | first | .message.usage.output_tokens) as $out |
-      # Definitive thinking detection from content_types
-      ([($last_call | .[] | .message.content[]? | select(.type == "thinking"))] | length > 0) as $has_think |
-      ($last_call | map(
-        [(.message.content[]? | select(.type == "text") | .text // "" | length),
-         (.message.content[]? | select(.type == "tool_use") | .input // {} | tostring | length)]
-         | add // 0
-      ) | add) as $visible_chars |
-      # Calibrated: ~2.7 chars per token for markdown/technical text
-      ($visible_chars / 2.7 | ceil) as $visible_tokens |
-      ($out - $visible_tokens) as $think_raw |
+      # Group by requestId to deduplicate (same call appears once per content block)
+      group_by(.requestId) |
+      # Extract per-call data
+      map({
+        out: (.[0].message.usage.output_tokens),
+        has_think: ([.[] | .message.content[]? | select(.type == "thinking")] | length > 0),
+        visible_chars: ([
+          (.[] | .message.content[]? | select(.type == "text") | .text // "" | length),
+          (.[] | .message.content[]? | select(.type == "tool_use") | .input // {} | tostring | length)
+        ] | add // 0)
+      }) |
+      # Aggregate across the turn
+      (map(select(.has_think)) | length) as $think_calls |
+      (length) as $total_calls |
+      (map(.out) | add) as $total_out |
+      (map(.visible_chars) | add // 0) as $total_visible |
+      ($total_visible / 2.7 | ceil) as $vis_tok |
+      ($total_out - $vis_tok) as $think_raw |
       (if $think_raw < 0 then 0 else $think_raw end) as $think |
-      (if $visible_tokens > 0 then ($out * 100 / $visible_tokens | floor) else 0 end) as $ratio_x100 |
-      "\($has_think)|\($think)|\($ratio_x100)"
+      (if $vis_tok > 0 then ($total_out * 100 / $vis_tok | floor) else 0 end) as $ratio |
+      ($think_calls > 0) as $any_think |
+      "\($any_think)|\($think)|\($ratio)|\($think_calls)|\($total_calls)"
     end
   ' 2>/dev/null)
 
-  IFS='|' read -r think_active think_est think_ratio <<< "$think_data"
+  IFS='|' read -r think_active think_est think_ratio think_calls think_total_calls <<< "$think_data"
 fi
 
 # --- 5h segment ---
@@ -181,27 +190,33 @@ if [ -n "$turn_cached" ]; then
   fi
 fi
 
-# --- Line 3: Thinking status + estimate ---
+# --- Line 3: Thinking status + estimate (aggregated across turn) ---
 line3=""
 if [ "$think_active" = "true" ]; then
-  # Thinking WAS active - show bar + estimate
   if [ -n "$think_est" ] && [ "$think_est" -ge 0 ] 2>/dev/null; then
     think_pct=$(( (think_est * 100) / THINKING_CAP ))
     [ "$think_pct" -gt 100 ] && think_pct=100
     think_bar=$(build_bar "$think_pct")
-    # Intensity label based on ratio (ratio is *100)
     intensity="light"
     if [ -n "$think_ratio" ] && [ "$think_ratio" -ge 500 ] 2>/dev/null; then
       intensity="heavy"
     elif [ -n "$think_ratio" ] && [ "$think_ratio" -ge 200 ] 2>/dev/null; then
       intensity="moderate"
     fi
-    line3="\033[32mthinking: ON\033[0m ${think_bar} ~$(fmt_tokens $think_est)/$(fmt_tokens $THINKING_CAP) ($intensity)"
+    calls_info=""
+    if [ -n "$think_calls" ] && [ -n "$think_total_calls" ]; then
+      calls_info=" ${think_calls}/${think_total_calls} calls"
+    fi
+    line3="\033[32mthinking: ON\033[0m ${think_bar} ~$(fmt_tokens $think_est) this turn ($intensity,${calls_info})"
   else
     line3="\033[32mthinking: ON\033[0m"
   fi
 elif [ "$think_active" = "false" ]; then
-  line3="\033[90mthinking: OFF\033[0m"
+  calls_info=""
+  if [ -n "$think_total_calls" ]; then
+    calls_info=" (0/${think_total_calls} calls)"
+  fi
+  line3="\033[90mthinking: OFF${calls_info}\033[0m"
 fi
 
 # --- Output ---
