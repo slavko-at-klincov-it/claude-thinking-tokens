@@ -2,7 +2,77 @@
 
 All statusline values verified against raw source data via manual calculation.
 
-## Method
+## Data Pipeline: Where the Numbers Come From
+
+The values displayed in the statusline travel through a 4-stage pipeline. No values are invented by our script, everything traces back to the Anthropic Messages API.
+
+### Stage 1: Anthropic Messages API
+
+When Claude Code sends a prompt to the API, the response contains a `usage` object:
+
+```
+POST https://api.anthropic.com/v1/messages
+→ Response includes:
+  usage.input_tokens              (fresh input tokens for this call)
+  usage.output_tokens             (full output incl. thinking tokens)
+  usage.cache_creation_input_tokens (tokens written to prompt cache)
+  usage.cache_read_input_tokens   (tokens read from prompt cache)
+```
+
+These are **Anthropic's numbers**, not ours. We do not calculate token counts.
+
+### Stage 2: Claude Code CLI (aggregation)
+
+Claude Code CLI receives the API response and aggregates data across the session:
+
+| Field | Source | How |
+|-------|--------|-----|
+| `rate_limits.five_hour.used_percentage` | Anthropic account limits | API response header or internal tracking |
+| `rate_limits.five_hour.resets_at` | Anthropic account limits | Unix timestamp from API |
+| `rate_limits.seven_day.*` | Same as above | 7-day rolling window |
+| `context_window.used_percentage` | CLI calculation | Current context size / context_window_size |
+| `context_window.total_input_tokens` | CLI aggregation | Sum of all input_tokens across session |
+| `context_window.total_output_tokens` | CLI aggregation | Sum of all output_tokens across session |
+| `context_window.current_usage.*` | API response | Direct from last API call's usage object |
+| `transcript_path` | CLI | Path to the JSONL conversation log |
+
+### Stage 3: Statusline JSON (stdin to our script)
+
+Claude Code pipes a JSON object to the statusline script via stdin on every UI update. This is the same JSON we log to `/tmp/claude-statusline-debug.json` for debugging. The script does not call any API, it only reads what Claude Code provides.
+
+### Stage 4: Our Script (calculation + display)
+
+Our script (`statusline.sh`) performs these calculations on the JSON:
+
+| Displayed Value | Calculation | Inputs |
+|-----------------|-------------|--------|
+| 5h/7d % | `floor(used_percentage)` | Direct from JSON, floored for bash compatibility |
+| 5h countdown | `resets_at - now()`, formatted as `Xh Ym` | resets_at from JSON, current time from `date +%s` |
+| 7d reset date | `date -r resets_at "+%a %H:%M"` | resets_at from JSON, formatted by system `date` |
+| ctx % | `floor(used_percentage)` | Direct from JSON |
+| last API-Call | `input_tokens + cache_creation + output_tokens` | 3 fields from current_usage, **excludes** cache_read |
+| session | `total_input_tokens + total_output_tokens` | 2 fields from context_window |
+| cached history | `cache_read_input_tokens` | Direct from current_usage |
+| thinking ON/OFF | Presence of `"type": "thinking"` content block | Parsed from JSONL transcript file |
+| thinking tokens | `output_tokens - ceil(visible_chars / 2.7)` | output_tokens from transcript usage + text/tool_use char count |
+| thinking intensity | `output_tokens / visible_tokens` ratio | Derived from above |
+
+### What We Calculate vs What We Pass Through
+
+| Category | Our role |
+|----------|----------|
+| Rate limits (%, reset time) | **Pass through** from JSON, only format for display |
+| Context window % | **Pass through** from JSON |
+| last API-Call | **Sum** 3 fields from JSON (simple addition) |
+| session | **Sum** 2 fields from JSON (simple addition) |
+| cached history | **Pass through** from JSON |
+| thinking ON/OFF | **Parse** transcript JSONL (check content_types) |
+| thinking tokens | **Calculate** via calibrated subtraction (our formula) |
+| Bar fill / colors | **Calculate** from percentage (cosmetic) |
+
+Only the thinking token estimate uses our own formula. Everything else is either passed through directly or a trivial sum of API-provided values.
+
+## Verification Method
 
 1. Read raw JSON from `/tmp/claude-statusline-debug.json` (written by statusline on each invocation)
 2. Extract each source field with `jq`
