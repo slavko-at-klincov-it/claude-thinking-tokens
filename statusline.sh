@@ -3,7 +3,7 @@
 #
 # Line 1: 5h Limit ██░░░░░░░░ 19% 1h32m | 7d Limit ██░░░░░░░░ 20% Fr 11:00 | ctx 4%
 # Line 2: last API-Call 724 | session 36.5k | cached history 75.6k
-# Line 3: thinking: ON ████░░░░░░ ~5.4k this turn (heavy, 8/15 calls)
+# Line 3: thinking: ON ████░░░░░░ ~5.4k this turn (heavy, 8/15 turns)
 #
 # "last API-Call" = new tokens (input + cache_creation + output), excludes cache reads
 # "cached history" = cache_read_input_tokens (conversation history reused from cache)
@@ -188,12 +188,12 @@ if [ "$think_active" = "true" ]; then
     think_pct=$(( (think_est * 100) / THINKING_CAP ))
     [ "$think_pct" -gt 100 ] && think_pct=100
     think_bar=$(build_bar "$think_pct")
-    line3="\033[32mthinking\033[0m ${think_bar} ~$(fmt_tokens $think_est) (${think_calls}/${think_total_calls} calls)"
+    line3="\033[32mthinking\033[0m ${think_bar} ~$(fmt_tokens $think_est) (${think_calls}/${think_total_calls} turns)"
   else
     line3="\033[32mthinking\033[0m"
   fi
 elif [ "$think_active" = "false" ]; then
-  line3="\033[90mthinking: OFF (0/${think_total_calls:-0} calls)\033[0m"
+  line3="\033[90mthinking: OFF (0/${think_total_calls:-0} turns)\033[0m"
 fi
 
 # --- Output ---
