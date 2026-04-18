@@ -269,7 +269,48 @@ Die Hypothese wurde **nicht bestaetigt**. Der deprecated manuelle Modus erklaert
 
 ---
 
-## 6. Unerwartete Befunde
+## 6. Server-seitige Thinking-Allokation (Issue #42796)
+
+Eine unabhaengige Analyse (GitHub Issue [anthropics/claude-code#42796](https://github.com/anthropics/claude-code/issues/42796)) mit 17,871 Thinking-Blocks und 234,760 Tool-Calls deckt auf, dass Anthropic Thinking-Budgets **server-seitig allokiert und throttelt**. Dies veraendert die Interpretation unserer Findings grundlegend.
+
+### Kernbefunde aus #42796
+
+**Thinking-Tiefe sank um 73%** zwischen Januar und Maerz 2026:
+
+| Zeitraum | Median Thinking (chars) | vs Baseline |
+|----------|------------------------|-------------|
+| Jan 30 - Feb 8 (Baseline) | ~2,200 | - |
+| Ende Februar | ~720 | -67% |
+| Maerz (nach Redaction) | ~600 | -73% |
+
+Die Reduktion begann **vor** der Thinking-Redaction (`redact-thinking-2026-02-12`), was zeigt: Anthropic reduzierte die Thinking-Allokation serverseitig, unabhaengig von Client-Konfiguration.
+
+**Thinking ist load-abhaengig**: Die Allokation variiert je nach Serverauslastung. Zu US-Stosszeiten (17h PST) sinkt die Thinking-Tiefe auf den niedrigsten Wert.
+
+**Qualitaets-Impact ist katastrophal**: Read:Edit Ratio sank von 6.6 auf 2.0 (-70%), 33% aller Edits wurden ohne vorheriges Lesen der Datei durchgefuehrt, Stop-Hook-Verletzungen stiegen von 0 auf 173 in 17 Tagen, User-Interrupts stiegen 12x.
+
+### Implikation fuer unsere Findings
+
+Unsere Beobachtung "max 17% Thinking-Budget genutzt" ist moeglicherweise **kein Zeichen von Modell-Effizienz, sondern von Server-Throttling**:
+
+| Unsere Interpretation (alt) | Neue Interpretation (nach #42796) |
+|-----------------------------|-----------------------------------|
+| Claude braucht nur ~22k Tokens zum Denken | Server allokiert moeglicherweise nicht mehr |
+| 128k Budget ist Overkill | 128k Budget ist Client-Ceiling, Server ignoriert es |
+| Nur 2/6 Prompts brauchen Thinking | Server entscheidet moeglicherweise nicht der Prompt |
+| chars/2.7 Formel misst echtes Thinking | Formel misst was ALLOKIERT wurde, nicht was GEBRAUCHT wuerde |
+
+### Signature-Feld als Thinking-Proxy
+
+Issue #42796 nutzt die Signature-Laenge als Proxy fuer Thinking-Tiefe (Pearson r = 0.971 auf 7,146 Blocks mit sichtbarem Thinking-Text). Wir konnten diese Korrelation **nicht reproduzieren**: 99.2% unserer 393 Thinking-Blocks sind redacted (April 2026, post-Redaction). Unsere gemessene Korrelation Signature vs output_tokens liegt bei r = 0.68 (moderater Zusammenhang). Die Signature-Laenge ist ein sekundaerer Indikator, kein Ersatz fuer unsere Formel.
+
+### Was wir weiterhin messen koennen
+
+Unsere chars/2.7 Formel und die Thinking-Detection via content_types bleiben korrekt fuer die Frage: **"Wie viel Thinking wurde in diesem Turn allokiert?"** Die Frage die wir NICHT beantworten koennen: **"Wie viel Thinking haette Claude gebraucht?"**
+
+---
+
+## 7. Unerwartete Befunde
 
 ### Nur 2 von 6 Prompts triggerten Thinking (in BEIDEN Modi)
 
@@ -277,11 +318,11 @@ Trotz `effort=max` und `budget=128000` aktivierte Opus 4.6 Thinking identisch in
 - Logik-Puzzle mit Twist (heavy, 5.1k tokens)
 - Mathematischer Beweis (light, 700 tokens)
 
-Vier Prompts, darunter eine komplexe CAP-Theorem-Analyse, liefen OHNE Thinking. Die wahrscheinlichste Erklaerung: Opus 4.6 ist effizient genug, um viele Aufgaben ohne Extended Thinking zu loesen, und trifft diese Entscheidung prompt-basiert, unabhaengig vom konfigurierten Modus.
+Vier Prompts, darunter eine komplexe CAP-Theorem-Analyse, liefen OHNE Thinking. Im Kontext von Abschnitt 6 ist unklar ob dies Modell-Effizienz oder Server-Throttling widerspiegelt.
 
-### Max Thinking in 7 Tagen: 27.7k von 128k (22%)
+### Max Thinking: 22.3k von 128k (17%)
 
-Ueber hunderte API-Calls in einer Woche erreichte kein einziger Call mehr als 22% des Thinking-Budgets. Claude allokiert Thinking konservativ, selbst bei maximalen Settings.
+Ein gezielter Maximum-Thinking-Test (5-teiliger formaler Beweis eines verteilten Lock-Protokolls mit Byzantine-Fehleranalyse und TLA+-Spezifikation) erreichte 22,334 geschaetzte Thinking-Tokens (17.4% des 128k Budgets). Ueber hunderte API-Calls in einer Woche lag das Maximum bei 27.7k output_tokens (22%). Im Kontext von Abschnitt 6 moeglicherweise ein Server-Cap, nicht ein Modell-Limit.
 
 ### chars/token Ratio ist 2.7, nicht 4.0
 
@@ -289,7 +330,7 @@ Die weit verbreitete Annahme von ~4 chars/token basiert auf reinem englischen Pr
 
 ---
 
-## 7. Praktische Implementierung: Statusline
+## 8. Praktische Implementierung: Statusline
 
 Die Erkenntnisse sind in `~/.claude/statusline.sh` implementiert:
 
@@ -307,13 +348,15 @@ Datenquelle fuer Thinking: `usage.output_tokens` aus dem JSONL-Transcript (= vol
 
 ---
 
-## 8. Offene Fragen
+## 9. Offene Fragen
 
-1. **Warum triggert Opus 4.6 so selten Thinking?** Selbst bei effort=max, hohem Budget, UND in beiden Modi (Manual + Adaptive) bleiben 4/6 Calls thinking-frei. Dies scheint eine inhärente Eigenschaft des Modells zu sein, nicht ein Konfigurations-Artefakt. Ein Experiment mit explizit denkforciierenden Prompts (z.B. "Think step by step, explore 3 approaches") koennte klaeren, ob Thinking durch Prompt-Design zuverlaessiger aktivierbar ist.
+1. **Server-Throttle oder Modell-Effizienz?** Unsere Tests zeigen max 17% Thinking-Budget-Nutzung. Issue #42796 dokumentiert serverseitiges Throttling. Ohne Zugang zu Anthropics Infrastruktur-Metriken koennen wir nicht unterscheiden ob Claude wenig denkt weil es effizient ist, oder weil der Server wenig allokiert. Ein Zeit-basiertes Experiment (gleiche Prompts zu verschiedenen Tageszeiten) koennte Klarheit schaffen: wenn Thinking zu Off-Peak-Zeiten hoeher ist, spricht das fuer Server-Throttle.
 
-2. **Konfligiert "Minimize output tokens" mit Thinking?** Die CLAUDE.md-Anweisung koennte Thinking unterdruecken, da das Modell "output" moeglicherweise inklusiv interpretiert. Ein kontrolliertes Experiment mit/ohne diese Instruktion wuerde das klaeren.
+2. **Ist die Thinking-Allokation plan-abhaengig?** Pro-Subscription vs Max-Subscription koennten unterschiedliche Thinking-Budgets haben. Issue #42796 dokumentiert $42k geschaetzte Bedrock-Kosten bei $400 Subscription, was auf massive Subventionierung hindeutet. Anthropic koennte Thinking reduzieren um Kosten zu kontrollieren.
 
-3. **Unterschied print-mode vs interaktiv**: Im interaktiven Modus (Hauptsession) war Thinking haeufiger aktiv als in `claude -p`. Die Modi koennten unterschiedliche API-Parameter senden oder der Kontext (System-Prompt, Plugins, CLAUDE.md) unterscheidet sich.
+3. **Konfligiert "Minimize output tokens" mit Thinking?** Die CLAUDE.md-Anweisung koennte Thinking unterdruecken. Experiment mit/ohne diese Instruktion steht aus.
+
+4. **Unterschied print-mode vs interaktiv**: Im interaktiven Modus (Hauptsession) war Thinking haeufiger aktiv als in `claude -p`. Moeglicherweise unterschiedliche API-Parameter oder System-Prompt-Unterschiede.
 
 ---
 

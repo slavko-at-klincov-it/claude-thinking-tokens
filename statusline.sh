@@ -90,6 +90,8 @@ if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
       # Group by requestId to deduplicate (same call appears once per content block)
       group_by(.requestId) |
       # Extract per-call data
+      # Extract max signature BEFORE mapping (needs raw entries)
+      ([.[][] | .message.content[]? | select(.type == "thinking") | .signature // "" | length] | if length > 0 then max else 0 end) as $max_sig |
       map({
         out: (.[0].message.usage.output_tokens),
         has_think: ([.[] | .message.content[]? | select(.type == "thinking")] | length > 0),
@@ -108,11 +110,11 @@ if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
       (if $think_raw < 0 then 0 else $think_raw end) as $think |
       (if $vis_tok > 0 then ($total_out * 100 / $vis_tok | floor) else 0 end) as $ratio |
       ($think_calls > 0) as $any_think |
-      "\($any_think)|\($think)|\($ratio)|\($think_calls)|\($total_calls)"
+      "\($any_think)|\($think)|\($ratio)|\($think_calls)|\($total_calls)|\($max_sig)"
     end
   ' 2>/dev/null)
 
-  IFS='|' read -r think_active think_est think_ratio think_calls think_total_calls <<< "$think_data"
+  IFS='|' read -r think_active think_est think_ratio think_calls think_total_calls think_sig <<< "$think_data"
 fi
 
 # --- 5h segment ---
@@ -207,7 +209,11 @@ if [ "$think_active" = "true" ]; then
     if [ -n "$think_calls" ] && [ -n "$think_total_calls" ]; then
       calls_info=" ${think_calls}/${think_total_calls} calls"
     fi
-    line3="\033[32mthinking: ON\033[0m ${think_bar} ~$(fmt_tokens $think_est) this turn ($intensity,${calls_info})"
+    sig_info=""
+    if [ -n "$think_sig" ] && [ "$think_sig" -gt 0 ] 2>/dev/null; then
+      sig_info=" sig:$(fmt_tokens $think_sig)"
+    fi
+    line3="\033[32mthinking: ON\033[0m ${think_bar} ~$(fmt_tokens $think_est) this turn ($intensity,${calls_info}${sig_info})"
   else
     line3="\033[32mthinking: ON\033[0m"
   fi
